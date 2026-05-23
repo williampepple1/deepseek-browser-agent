@@ -1,5 +1,6 @@
 import { chatCompletion } from '../lib/deepseek.js';
 import { BROWSER_TOOLS, SYSTEM_PROMPT } from '../lib/tools.js';
+import { initWebSocketBridge } from '../bridge/ws-client.js';
 
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
@@ -172,6 +173,7 @@ async function executeToolAction(tabId, toolName, args) {
 
 // --- Agent Task Loop ---
 const runningTasks = new Set();
+let currentTaskAborted = false;
 
 async function runAgentTask(userMessage, port, isAborted) {
   const tab = await getActiveTab();
@@ -348,9 +350,13 @@ async function runAgentTask(userMessage, port, isAborted) {
 }
 
 // --- Port Management ---
+initWebSocketBridge(runAgentTask, {
+  get isAborted() { return currentTaskAborted; },
+  set isAborted(v) { currentTaskAborted = v; }
+});
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'sidebar') {
-    let taskAborted = false;
 
     port.onMessage.addListener(async (msg) => {
       switch (msg.type) {
@@ -370,14 +376,15 @@ chrome.runtime.onConnect.addListener((port) => {
           break;
         }
         case 'run_task':
-          runAgentTask(msg.text, port, () => taskAborted);
+          currentTaskAborted = false;
+          runAgentTask(msg.text, port, () => currentTaskAborted);
           break;
         case 'cancel_task':
-          taskAborted = true;
+          currentTaskAborted = true;
           break;
       }
     });
 
-    port.onDisconnect.addListener(() => { taskAborted = true; });
+    port.onDisconnect.addListener(() => { currentTaskAborted = true; });
   }
 });
