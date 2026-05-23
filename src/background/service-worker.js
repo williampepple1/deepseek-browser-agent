@@ -1,8 +1,6 @@
 import { chatCompletion } from '../lib/deepseek.js';
 import { BROWSER_TOOLS, SYSTEM_PROMPT } from '../lib/tools.js';
 
-let activeTaskAborted = false;
-
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
 });
@@ -87,9 +85,6 @@ async function executeToolAction(tabId, toolName, args) {
     case 'scroll':
     case 'press':
     case 'get_page_content': {
-      if (!await ensureContentScript(tabId)) {
-        return { success: false, error: 'Cannot communicate with page. Try reloading the page.' };
-      }
       const result = await chrome.tabs.sendMessage(tabId, {
         type: 'execute_action',
         action: { action: toolName, ...args }
@@ -102,9 +97,7 @@ async function executeToolAction(tabId, toolName, args) {
   }
 }
 
-async function runAgentTask(userMessage, port) {
-  activeTaskAborted = false;
-
+async function runAgentTask(userMessage, port, isAborted) {
   try {
     const { apiKey, model, thinkingEnabled, reasoningEffort } = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
     if (!apiKey) {
@@ -141,7 +134,7 @@ async function runAgentTask(userMessage, port) {
     port.postMessage({ type: 'status', data: 'Thinking...' });
 
     while (iterations < MAX_ITERATIONS) {
-      if (activeTaskAborted) {
+      if (isAborted()) {
         port.postMessage({ type: 'status', data: 'Task cancelled.' });
         return;
       }
@@ -174,7 +167,7 @@ async function runAgentTask(userMessage, port) {
 
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         for (const toolCall of msg.tool_calls) {
-          if (activeTaskAborted) return;
+          if (isAborted()) return;
 
           const funcName = toolCall.function.name;
           let funcArgs;
@@ -197,9 +190,9 @@ async function runAgentTask(userMessage, port) {
 
           let toolResultContent;
           if (result.page_content) {
-            toolResultContent = `Result: ${result.message || result.error}\n\nUpdated page:\n${result.page_content}`;
+            toolResultContent = `Result: ${result.message || result.error}\n\nUpdated page:\n${result.page_content.substring(0, 3000)}`;
           } else if (result.updated_page) {
-            toolResultContent = `Result: ${result.message || result.error}\n\nUpdated page:\n${result.updated_page}`;
+            toolResultContent = `Result: ${result.message || result.error}\n\nUpdated page:\n${result.updated_page.substring(0, 3000)}`;
           } else {
             toolResultContent = JSON.stringify(result);
           }
@@ -266,6 +259,8 @@ async function runAgentTask(userMessage, port) {
 
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'sidebar') {
+    let taskAborted = false;
+
     port.onMessage.addListener(async (msg) => {
       switch (msg.type) {
         case 'get_settings': {
@@ -286,19 +281,19 @@ chrome.runtime.onConnect.addListener((port) => {
         }
 
         case 'run_task': {
-          runAgentTask(msg.text, port);
+          runAgentTask(msg.text, port, () => taskAborted);
           break;
         }
 
         case 'cancel_task': {
-          activeTaskAborted = true;
+          taskAborted = true;
           break;
         }
       }
     });
 
     port.onDisconnect.addListener(() => {
-      activeTaskAborted = true;
+      taskAborted = true;
     });
   }
 });

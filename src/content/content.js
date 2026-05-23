@@ -2,107 +2,89 @@
   'use strict';
 
   let elementMap = new Map();
+  const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'SVG', 'META', 'LINK', 'HEAD', 'TEMPLATE']);
+
+  const INTERACTIVE_TAGS = new Set([
+    'button', 'a', 'input', 'textarea', 'select',
+    'details', 'summary', 'label', 'option'
+  ]);
+
+  const INTERACTIVE_ROLES = new Set([
+    'button', 'link', 'textbox', 'combobox', 'listbox',
+    'menuitem', 'tab', 'switch', 'checkbox', 'radio',
+    'option', 'slider', 'spinbutton', 'searchbox'
+  ]);
 
   function isVisible(el) {
-    if (!el) return false;
-    const style = window.getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    if (!el || !el.offsetParent && el.tagName !== 'BODY') return false;
     const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
+    if (rect.width === 0 || rect.height === 0) return false;
+    const style = window.getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none';
+  }
+
+  function isInteractive(el) {
+    const tag = el.tagName.toLowerCase();
+    if (INTERACTIVE_TAGS.has(tag)) {
+      if (tag === 'input' && (el.type === 'hidden' || el.disabled)) return false;
+      if ((tag === 'button' || tag === 'input' || tag === 'textarea' || tag === 'select') && el.disabled) return false;
+      return true;
+    }
+    const role = el.getAttribute('role');
+    if (role && INTERACTIVE_ROLES.has(role)) return true;
+    if (el.getAttribute('contenteditable') === 'true') return true;
+    const tabindex = el.getAttribute('tabindex');
+    if (tabindex !== null && tabindex !== '-1') return true;
+    return false;
+  }
+
+  function getElementText(el) {
+    const tag = el.tagName.toLowerCase();
+    let text = '';
+    if (tag === 'input') {
+      text = el.value || el.placeholder || el.getAttribute('aria-label') || el.name || '';
+    } else if (tag === 'textarea') {
+      text = el.value || el.placeholder || el.getAttribute('aria-label') || el.name || '';
+    } else if (tag === 'select') {
+      const sel = el.options[el.selectedIndex];
+      text = sel ? sel.text : (el.getAttribute('aria-label') || el.name || '');
+    } else if (tag === 'a') {
+      text = el.textContent || '';
+      const href = el.getAttribute('href');
+      if (href) text += ' -> ' + href;
+    } else {
+      text = el.textContent || el.getAttribute('aria-label') || el.title || '';
+    }
+    return text.trim().replace(/\s+/g, ' ').substring(0, 150);
   }
 
   function getPageContent() {
     elementMap.clear();
 
-    const candidates = new Set();
-
-    const interactiveSelectors = [
-      'button:not([disabled])',
-      'a[href]',
-      'input:not([type="hidden"]):not([disabled])',
-      'textarea:not([disabled])',
-      'select:not([disabled])',
-      '[role="button"]',
-      '[role="link"]',
-      '[role="textbox"]',
-      '[role="combobox"]',
-      '[role="searchbox"]',
-      '[role="listbox"]',
-      '[role="menuitem"]',
-      '[role="tab"]',
-      '[role="switch"]',
-      '[role="checkbox"]',
-      '[role="radio"]',
-      '[role="option"]',
-      '[contenteditable="true"]',
-      '[tabindex]:not([tabindex="-1"])',
-      'details summary'
-    ];
-
-    interactiveSelectors.forEach(selector => {
-      try {
-        document.querySelectorAll(selector).forEach(el => {
-          if (isVisible(el)) candidates.add(el);
-        });
-      } catch (e) {
-        // Skip invalid selectors
-      }
-    });
-
-    let elements = [];
-    let textNodes = [];
+    const elements = [];
+    const textNodes = [];
     let index = 1;
+    const MAX_ELEMENTS = 150;
+    const MAX_TEXTNODES = 30;
 
-    for (const el of candidates) {
-      const tag = el.tagName.toLowerCase();
-      let text = '';
-      let elementType = '';
-
-      if (tag === 'input') {
-        elementType = el.type || 'text';
-        text = el.value || el.placeholder || el.getAttribute('aria-label') || el.name || '';
-      } else if (tag === 'textarea') {
-        elementType = 'textarea';
-        text = el.value || el.placeholder || el.getAttribute('aria-label') || el.name || '';
-      } else if (tag === 'select') {
-        elementType = 'select';
-        const selected = el.options[el.selectedIndex];
-        text = selected ? selected.text : (el.getAttribute('aria-label') || el.name || '');
-      } else if (tag === 'a') {
-        elementType = 'link';
-        text = el.textContent || '';
-        const href = el.getAttribute('href');
-        if (href) text += ' -> ' + href;
-      } else if (tag === 'button') {
-        elementType = 'button';
-        text = el.textContent || el.getAttribute('aria-label') || el.title || '';
-      } else {
-        elementType = tag;
-        text = el.textContent || el.getAttribute('aria-label') || '';
-      }
-
-      text = text.trim().replace(/\s+/g, ' ').substring(0, 150);
-      if (!text) continue;
-
-      el.setAttribute('data-dsai-idx', index);
-      elementMap.set(index, el);
-
-      const tagInfo = elementType ? `${tag}[${elementType}]` : tag;
-      elements.push(`[${index}] <${tagInfo}> ${text}`);
-
-      index++;
-    }
-
-    // Collect visible text content from main content area (limited)
-    const mainContent = document.querySelector('main, article, [role="main"], .content, #content') || document.body;
     const walker = document.createTreeWalker(
-      mainContent,
-      NodeFilter.SHOW_TEXT,
+      document.body,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
       {
         acceptNode: function (node) {
-          const parent = node.parentElement;
-          if (!parent || !isVisible(parent)) return NodeFilter.FILTER_REJECT;
-          if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'SVG'].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
+          if (node.nodeType === Node.TEXT_NODE) {
+            if (textNodes.length >= MAX_TEXTNODES) return NodeFilter.FILTER_REJECT;
+            const text = node.textContent.trim();
+            if (text.length < 20) return NodeFilter.FILTER_REJECT;
+            const parent = node.parentElement;
+            if (!parent || SKIP_TAGS.has(parent.tagName)) return NodeFilter.FILTER_REJECT;
+            if (!isVisible(parent)) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+          }
+          if (elements.length >= MAX_ELEMENTS) return NodeFilter.FILTER_REJECT;
+          if (SKIP_TAGS.has(node.tagName)) return NodeFilter.FILTER_REJECT;
+          if (!isInteractive(node)) return NodeFilter.FILTER_REJECT;
+          if (!isVisible(node)) return NodeFilter.FILTER_REJECT;
           return NodeFilter.FILTER_ACCEPT;
         }
       }
@@ -110,25 +92,37 @@
 
     let node;
     while (node = walker.nextNode()) {
-      const text = node.textContent.trim();
-      if (text.length > 15) textNodes.push(text);
-    }
+      if (node.nodeType === Node.TEXT_NODE) {
+        textNodes.push(node.textContent.trim().substring(0, 300));
+      } else {
+        const tag = node.tagName.toLowerCase();
+        const type = (tag === 'input') ? (node.type || 'text') : (tag === 'textarea' ? 'textarea' : tag === 'select' ? 'select' : tag);
+        const text = getElementText(node);
+        if (!text) continue;
 
-    const pageText = textNodes.slice(0, 40).join('\n').substring(0, 2500);
+        elementMap.set(index, node);
+
+        let typeLabel = '';
+        if (tag === 'input') typeLabel = `[${type}]`;
+        else if (tag === 'a') typeLabel = '[link]';
+        else if (tag === 'button') typeLabel = '[btn]';
+        else if (tag === 'select') typeLabel = '[sel]';
+        else if (tag === 'textarea') typeLabel = '[txt]';
+
+        elements.push(`[${index}] <${tag}${typeLabel}> ${text}`);
+        index++;
+      }
+    }
 
     let output = [];
     output.push(`URL: ${window.location.href}`);
     output.push(`Title: ${document.title}`);
     output.push('');
-    output.push('=== Interactive Elements ===');
-    if (elements.length === 0) {
-      output.push('(No interactive elements found)');
-    } else {
-      output.push(elements.join('\n'));
-    }
+    output.push('=== Elements ===');
+    output.push(elements.length > 0 ? elements.join('\n') : '(none)');
     output.push('');
-    output.push('=== Page Text ===');
-    output.push(pageText || '(No visible text content)');
+    output.push('=== Text ===');
+    output.push(textNodes.length > 0 ? textNodes.join('\n') : '(none)');
 
     return output.join('\n');
   }

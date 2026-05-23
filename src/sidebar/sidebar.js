@@ -1,30 +1,60 @@
-const port = chrome.runtime.connect({ name: 'sidebar' });
-
+let port;
 let isRunning = false;
+let pendingMessages = [];
+let reconnectTimer = null;
 
-const chatScreen = document.getElementById('chat');
-const settingsScreen = document.getElementById('settings');
-const messagesEl = document.getElementById('messages');
-const userInput = document.getElementById('user-input');
-const sendBtn = document.getElementById('send-btn');
-const cancelBtn = document.getElementById('cancel-btn');
-const settingsBtn = document.getElementById('settings-btn');
-const saveSettingsBtn = document.getElementById('save-settings');
-const backSettingsBtn = document.getElementById('back-from-settings');
-const apiKeyInput = document.getElementById('api-key-input');
-const modelSelect = document.getElementById('model-select');
-const thinkingToggle = document.getElementById('thinking-toggle');
-const effortSelect = document.getElementById('effort-select');
-const effortGroup = document.getElementById('effort-group');
+function connectPort() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
 
-port.postMessage({ type: 'get_settings' });
+  try {
+    port = chrome.runtime.connect({ name: 'sidebar' });
+  } catch {
+    scheduleReconnect();
+    return;
+  }
 
-thinkingToggle.addEventListener('change', () => {
-  effortGroup.style.opacity = thinkingToggle.checked ? '1' : '0.4';
-  effortSelect.disabled = !thinkingToggle.checked;
-});
+  port.onMessage.addListener(handleMessage);
+  port.onDisconnect.addListener(() => {
+    port = null;
+    scheduleReconnect();
+  });
 
-port.onMessage.addListener((msg) => {
+  sendPending();
+  postMessage({ type: 'get_settings' });
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(connectPort, 500);
+}
+
+function postMessage(msg) {
+  if (port) {
+    try {
+      port.postMessage(msg);
+      return;
+    } catch {
+      port = null;
+    }
+  }
+  if (pendingMessages.length < 20) {
+    pendingMessages.push(msg);
+  }
+  scheduleReconnect();
+}
+
+function sendPending() {
+  const msgs = pendingMessages;
+  pendingMessages = [];
+  for (const msg of msgs) {
+    postMessage(msg);
+  }
+}
+
+function handleMessage(msg) {
   switch (msg.type) {
     case 'settings':
       if (msg.data.apiKey) {
@@ -66,6 +96,26 @@ port.onMessage.addListener((msg) => {
       setRunning(false);
       break;
   }
+}
+
+const chatScreen = document.getElementById('chat');
+const settingsScreen = document.getElementById('settings');
+const messagesEl = document.getElementById('messages');
+const userInput = document.getElementById('user-input');
+const sendBtn = document.getElementById('send-btn');
+const cancelBtn = document.getElementById('cancel-btn');
+const settingsBtn = document.getElementById('settings-btn');
+const saveSettingsBtn = document.getElementById('save-settings');
+const backSettingsBtn = document.getElementById('back-from-settings');
+const apiKeyInput = document.getElementById('api-key-input');
+const modelSelect = document.getElementById('model-select');
+const thinkingToggle = document.getElementById('thinking-toggle');
+const effortSelect = document.getElementById('effort-select');
+const effortGroup = document.getElementById('effort-group');
+
+thinkingToggle.addEventListener('change', () => {
+  effortGroup.style.opacity = thinkingToggle.checked ? '1' : '0.4';
+  effortSelect.disabled = !thinkingToggle.checked;
 });
 
 function setRunning(running) {
@@ -209,11 +259,11 @@ sendBtn.addEventListener('click', () => {
   userInput.style.height = 'auto';
   setRunning(true);
 
-  port.postMessage({ type: 'run_task', text });
+  postMessage({ type: 'run_task', text });
 });
 
 cancelBtn.addEventListener('click', () => {
-  port.postMessage({ type: 'cancel_task' });
+  postMessage({ type: 'cancel_task' });
   setRunning(false);
   addStatusMessage('Task cancelled.');
 });
@@ -244,7 +294,7 @@ saveSettingsBtn.addEventListener('click', () => {
     addErrorMessage('API key should start with "sk-". Please check your key.');
     return;
   }
-  port.postMessage({
+  postMessage({
     type: 'save_settings',
     apiKey,
     model,
@@ -259,3 +309,5 @@ document.querySelectorAll('.welcome ul li').forEach(li => {
     sendBtn.click();
   });
 });
+
+connectPort();

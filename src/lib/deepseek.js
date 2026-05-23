@@ -27,25 +27,33 @@ export async function chatCompletion(messages, tools, apiKey, options = {}) {
     body.tool_choice = 'auto';
   }
 
-  const response = await fetch(DEEPSEEK_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(body)
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
 
-  if (!response.ok) {
-    let errorMessage;
-    try {
-      const error = await response.json();
-      errorMessage = error.error?.message || `HTTP ${response.status}`;
-    } catch {
-      errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+  try {
+    const response = await fetch(DEEPSEEK_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      let errorMessage;
+      try {
+        const error = await response.json();
+        errorMessage = error.error?.message || `HTTP ${response.status}`;
+      } catch {
+        errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+      }
+      throw new Error(`DeepSeek API error: ${errorMessage}`);
     }
-    throw new Error(`DeepSeek API error: ${errorMessage}`);
-  }
 
-  return response.json();
+    return response.json();
+  } finally {
+    clearTimeout(timeout);
+  }
 }
