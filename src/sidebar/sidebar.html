@@ -21,8 +21,22 @@
         <div class="form-group">
           <label for="model-select">Model</label>
           <select id="model-select">
-            <option value="deepseek-chat">DeepSeek Chat (V3)</option>
-            <option value="deepseek-reasoner">DeepSeek Reasoner (R1)</option>
+            <option value="deepseek-v4-flash">DeepSeek V4 Flash (fast)</option>
+            <option value="deepseek-v4-pro">DeepSeek V4 Pro (powerful)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="thinking-toggle" checked>
+            <span>Thinking mode (chain-of-thought reasoning)</span>
+          </label>
+          <span class="hint">Improves accuracy for complex tasks. Disable for faster, simpler responses.</span>
+        </div>
+        <div class="form-group" id="effort-group">
+          <label for="effort-select">Reasoning effort</label>
+          <select id="effort-select">
+            <option value="high">High (default)</option>
+            <option value="max">Max (best accuracy, slower)</option>
           </select>
         </div>
         <div class="settings-actions">

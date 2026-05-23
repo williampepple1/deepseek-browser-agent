@@ -87,9 +87,10 @@ Get your API key from **[platform.deepseek.com/api_keys](https://platform.deepse
 2. Click the gear icon (⚙) to open Settings
 3. Paste your DeepSeek API key (starts with `sk-`)
 4. Choose your model:
-   - **DeepSeek Chat (V3)** — fast, general-purpose
-   - **DeepSeek Reasoner (R1)** — better reasoning, slower
-5. Click **Save Settings**
+   - **DeepSeek V4 Flash** — fast, great for most tasks ($0.14/$0.28 per 1M tokens)
+   - **DeepSeek V4 Pro** — most capable, best for complex tasks ($1.74/$3.48 per 1M tokens)
+5. Toggle **thinking mode** on/off (enabled by default — adds chain-of-thought reasoning for better accuracy)
+6. Click **Save Settings**
 
 Your API key is stored in Chrome's synced storage and encrypted at rest by Chrome. It is only sent to `api.deepseek.com`.
 

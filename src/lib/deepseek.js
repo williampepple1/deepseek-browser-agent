@@ -1,13 +1,26 @@
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
 
-export async function chatCompletion(messages, tools, apiKey, model = 'deepseek-chat') {
+export async function chatCompletion(messages, tools, apiKey, options = {}) {
+  const {
+    model = 'deepseek-v4-flash',
+    thinkingEnabled = true,
+    reasoningEffort = 'high'
+  } = options;
+
   const body = {
     model,
     messages,
-    temperature: 0.7,
     max_tokens: 4096,
     stream: false
   };
+
+  if (thinkingEnabled) {
+    body.thinking = { type: 'enabled' };
+    body.reasoning_effort = reasoningEffort;
+  } else {
+    body.thinking = { type: 'disabled' };
+    body.temperature = 0.7;
+  }
 
   if (tools && tools.length > 0) {
     body.tools = tools;

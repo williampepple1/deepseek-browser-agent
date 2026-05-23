@@ -106,7 +106,7 @@ async function runAgentTask(userMessage, port) {
   activeTaskAborted = false;
 
   try {
-    const { apiKey, model } = await chrome.storage.sync.get(['apiKey', 'model']);
+    const { apiKey, model, thinkingEnabled, reasoningEffort } = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
     if (!apiKey) {
       port.postMessage({ type: 'error', data: 'Please set your DeepSeek API key in the settings (gear icon).' });
       return;
@@ -150,7 +150,11 @@ async function runAgentTask(userMessage, port) {
         messages,
         BROWSER_TOOLS,
         apiKey,
-        model || 'deepseek-chat'
+        {
+          model: model || 'deepseek-v4-flash',
+          thinkingEnabled: thinkingEnabled !== false,
+          reasoningEffort: reasoningEffort || 'high'
+        }
       );
 
       const choice = response.choices?.[0];
@@ -160,7 +164,13 @@ async function runAgentTask(userMessage, port) {
       }
 
       const msg = choice.message;
-      messages.push(msg);
+
+      messages.push({
+        role: 'assistant',
+        content: msg.content || null,
+        reasoning_content: msg.reasoning_content || null,
+        tool_calls: msg.tool_calls || null
+      });
 
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         for (const toolCall of msg.tool_calls) {
@@ -239,7 +249,11 @@ async function runAgentTask(userMessage, port) {
       content: `Maximum steps reached. Provide a summary based on the current page:\n\n${finalContent}`
     });
 
-    const finalResponse = await chatCompletion(messages, [], apiKey, model || 'deepseek-chat');
+    const finalResponse = await chatCompletion(messages, [], apiKey, {
+      model: model || 'deepseek-v4-flash',
+      thinkingEnabled: thinkingEnabled !== false,
+      reasoningEffort: reasoningEffort || 'high'
+    });
     port.postMessage({
       type: 'result',
       data: finalResponse.choices?.[0]?.message?.content || 'Task execution completed. Check the page for results.'
@@ -255,7 +269,7 @@ chrome.runtime.onConnect.addListener((port) => {
     port.onMessage.addListener(async (msg) => {
       switch (msg.type) {
         case 'get_settings': {
-          const settings = await chrome.storage.sync.get(['apiKey', 'model']);
+          const settings = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
           port.postMessage({ type: 'settings', data: settings });
           break;
         }
@@ -263,7 +277,9 @@ chrome.runtime.onConnect.addListener((port) => {
         case 'save_settings': {
           await chrome.storage.sync.set({
             apiKey: msg.apiKey,
-            model: msg.model || 'deepseek-chat'
+            model: msg.model || 'deepseek-v4-flash',
+            thinkingEnabled: msg.thinkingEnabled !== false,
+            reasoningEffort: msg.reasoningEffort || 'high'
           });
           port.postMessage({ type: 'settings_saved' });
           break;

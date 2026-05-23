@@ -13,15 +13,27 @@ const saveSettingsBtn = document.getElementById('save-settings');
 const backSettingsBtn = document.getElementById('back-from-settings');
 const apiKeyInput = document.getElementById('api-key-input');
 const modelSelect = document.getElementById('model-select');
+const thinkingToggle = document.getElementById('thinking-toggle');
+const effortSelect = document.getElementById('effort-select');
+const effortGroup = document.getElementById('effort-group');
 
 port.postMessage({ type: 'get_settings' });
+
+thinkingToggle.addEventListener('change', () => {
+  effortGroup.style.opacity = thinkingToggle.checked ? '1' : '0.4';
+  effortSelect.disabled = !thinkingToggle.checked;
+});
 
 port.onMessage.addListener((msg) => {
   switch (msg.type) {
     case 'settings':
       if (msg.data.apiKey) {
         apiKeyInput.value = msg.data.apiKey || '';
-        modelSelect.value = msg.data.model || 'deepseek-chat';
+        modelSelect.value = msg.data.model || 'deepseek-v4-flash';
+        thinkingToggle.checked = msg.data.thinkingEnabled !== false;
+        effortSelect.value = msg.data.reasoningEffort || 'high';
+        effortSelect.disabled = !thinkingToggle.checked;
+        effortGroup.style.opacity = thinkingToggle.checked ? '1' : '0.4';
       }
       break;
 
@@ -232,7 +244,13 @@ saveSettingsBtn.addEventListener('click', () => {
     addErrorMessage('API key should start with "sk-". Please check your key.');
     return;
   }
-  port.postMessage({ type: 'save_settings', apiKey, model });
+  port.postMessage({
+    type: 'save_settings',
+    apiKey,
+    model,
+    thinkingEnabled: thinkingToggle.checked,
+    reasoningEffort: effortSelect.value
+  });
 });
 
 document.querySelectorAll('.welcome ul li').forEach(li => {
