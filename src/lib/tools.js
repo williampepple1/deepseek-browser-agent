@@ -21,9 +21,7 @@ Important rules:
 9. If an action fails, try an alternative approach — e.g. if click[5] fails, try press Enter instead
 10. If the page changes unexpectedly (SPA navigation, popups), call get_page_content to re-scan
 11. Never repeat the exact same action that just failed — try a different approach
-12. When you complete the task, provide a clear summary of what was accomplished.
-
-When you complete the task, provide a clear summary of what was accomplished.`;
+12. When you complete the task, provide a clear summary of what was accomplished.`;
 
 export const BROWSER_TOOLS = [
   {
@@ -204,6 +202,20 @@ export const BROWSER_TOOLS = [
           url: { type: 'string', description: 'The URL of the document' }
         },
         required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'add_site_note',
+      description: 'Save a note about how this site works for future visits. Use this when you discover a website quirk.',
+      parameters: {
+        type: 'object',
+        properties: {
+          note: { type: 'string', description: 'The note to save about this site' }
+        },
+        required: ['note']
       }
     }
   }

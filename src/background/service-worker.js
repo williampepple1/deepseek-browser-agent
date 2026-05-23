@@ -1,6 +1,5 @@
 import { chatCompletion } from '../lib/deepseek.js';
 import { BROWSER_TOOLS, SYSTEM_PROMPT } from '../lib/tools.js';
-import { initWebSocketBridge } from '../bridge/ws-client.js';
 
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
@@ -60,6 +59,24 @@ async function waitForPageLoad(tabId) {
   });
 }
 
+// --- Site Memory ---
+async function getSiteMemory(domain) {
+  const data = await chrome.storage.local.get(['siteMemory']);
+  const memory = data.siteMemory || {};
+  return memory[domain] || [];
+}
+
+async function saveSiteMemory(domain, note) {
+  const data = await chrome.storage.local.get(['siteMemory']);
+  const memory = data.siteMemory || {};
+  if (!memory[domain]) memory[domain] = [];
+  if (!memory[domain].includes(note)) {
+    memory[domain].push(note);
+  }
+  await chrome.storage.local.set({ siteMemory: memory });
+}
+
+// --- Tool Execution ---
 async function executeToolAction(tabId, toolName, args) {
   switch (toolName) {
     case 'navigate': {
@@ -96,7 +113,7 @@ async function executeToolAction(tabId, toolName, args) {
 
     case 'list_tabs': {
       const tabs = await chrome.tabs.query({ currentWindow: true });
-      const tabList = tabs.map(t => `[${t.id}] ${t.title}`).join('\n');
+      const tabList = tabs.slice(0, 30).map(t => `[${t.id}] ${t.title}`).join('\n');
       return { success: true, message: 'Tabs listed:', page_content: tabList };
     }
 
@@ -106,14 +123,29 @@ async function executeToolAction(tabId, toolName, args) {
     }
 
     case 'open_tab': {
-      const tab = await chrome.tabs.create({ url: args.url });
-      return { success: true, message: `Opened tab ${tab.id}` };
+      const newTab = await chrome.tabs.create({ url: args.url });
+      await waitForPageLoad(newTab.id);
+      await chrome.tabs.update(newTab.id, { active: true });
+      return { success: true, message: `Opened and switched to tab ${newTab.id}` };
     }
 
     case 'read_document': {
-      const response = await fetch(args.url);
-      const text = await response.text();
-      return { success: true, message: 'Document content:', page_content: text.substring(0, 5000) };
+      try {
+        const response = await fetch(args.url);
+        if (!response.ok) return { success: false, error: `HTTP ${response.status}` };
+        const text = await response.text();
+        return { success: true, message: 'Document content:', page_content: text.substring(0, 5000) };
+      } catch (e) {
+        return { success: false, error: `Failed to fetch document: ${e.message}` };
+      }
+    }
+
+    case 'add_site_note': {
+      const t = await getActiveTab();
+      if (!t) return { success: false, error: 'No active tab' };
+      const domain = (() => { try { return new URL(t.url).hostname; } catch { return 'unknown'; } })();
+      await saveSiteMemory(domain, args.note);
+      return { success: true, message: `Saved note for ${domain}.` };
     }
 
     case 'click':
@@ -136,9 +168,7 @@ async function executeToolAction(tabId, toolName, args) {
   }
 }
 
-let taskRunning = false;
-export let currentTaskAborted = false;
-
+// --- Agent Task Loop ---
 const runningTasks = new Set();
 
 async function runAgentTask(userMessage, port, isAborted) {
@@ -155,49 +185,44 @@ async function runAgentTask(userMessage, port, isAborted) {
 
   try {
     const { apiKey, model, thinkingEnabled, reasoningEffort } = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
-    
-    // ... rest of the runAgentTask function ...
-
-  } catch (error) {
-    port.postMessage({ type: 'error', data: error.message || 'An unexpected error occurred.' });
-  } finally {
-    runningTasks.delete(tab.id);
-  }
-}
-  taskRunning = true;
-  currentTaskAborted = false;
-  try {
-    const { apiKey, model, thinkingEnabled, reasoningEffort } = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
     if (!apiKey) {
-      port.postMessage({ type: 'error', data: 'Please set your DeepSeek API key in the settings (gear icon).' });
-      return;
-    }
-
-    const tab = await getActiveTab();
-    if (!tab) {
-      port.postMessage({ type: 'error', data: 'No active tab found. Please open a web page first.' });
+      port.postMessage({ type: 'error', data: 'Please set your DeepSeek API key in settings.' });
       return;
     }
 
     port.postMessage({ type: 'status', data: 'Reading page content...' });
     const contentReady = await ensureContentScript(tab.id);
     if (!contentReady) {
-      if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('about:'))) {
-        port.postMessage({ type: 'error', data: 'Cannot read Chrome system pages. Please open a regular web page.' });
-      } else {
-        port.postMessage({ type: 'error', data: 'Could not read page content. The page may be restricted or still loading. Try refreshing.' });
-      }
+      const msg = tab.url?.startsWith('chrome://') || tab.url?.startsWith('about:')
+        ? 'Cannot read Chrome system pages. Open a regular web page.'
+        : 'Could not read page. Try refreshing.';
+      port.postMessage({ type: 'error', data: msg });
       return;
     }
 
     const pageContext = await getPageContent(tab.id);
     if (!pageContext) {
-      port.postMessage({ type: 'error', data: 'Could not read page content. Try refreshing the page.' });
+      port.postMessage({ type: 'error', data: 'Could not read page content.' });
       return;
     }
 
-    let nextUserMessage = `Here is the current page:\n\n${pageContext}\n\nUser task: ${userMessage}\n\nComplete this task step by step using the available tools. After each action you will see the updated page content.`;
+    const domain = (() => { try { return new URL(tab.url).hostname; } catch { return 'unknown'; } })();
+    const siteNotes = await getSiteMemory(domain);
+    let systemPrompt = SYSTEM_PROMPT;
+    if (siteNotes.length > 0) {
+      systemPrompt += `\n\n### Site Memory for ${domain}:\n` + siteNotes.map(n => `- ${n}`).join('\n');
+    }
+
+    const messages = [
+      { role: 'system', content: systemPrompt }
+    ];
+
     let pendingImage = null;
+    let iterations = 0;
+    const MAX_ITERATIONS = 25;
+
+    messages.push({ role: 'user', content: `Current page:\n${pageContext}\n\nUser task: ${userMessage}` });
+    port.postMessage({ type: 'status', data: 'Thinking...' });
 
     while (iterations < MAX_ITERATIONS) {
       if (isAborted()) {
@@ -205,35 +230,11 @@ async function runAgentTask(userMessage, port, isAborted) {
         return;
       }
 
-      // If we have a pending image from a tool, inject it into the message
-      if (pendingImage) {
-        messages.push({
-          role: 'user',
-          content: [
-            { type: 'text', text: "Here is the screenshot you requested:" },
-            { type: 'image_url', image_url: { url: pendingImage } }
-          ]
-        });
-        pendingImage = null;
-      } else {
-        messages.push({ role: 'user', content: nextUserMessage });
-      }
-
-      const response = await chatCompletion(
-        messages,
-        BROWSER_TOOLS,
-        apiKey,
-        {
-          model: model || 'deepseek-v4-flash',
-          thinkingEnabled: thinkingEnabled !== false,
-          reasoningEffort: reasoningEffort || 'high'
-        }
-      );
-
-      // ... rest of the loop ...
-      // Need to store pendingImage = result.image_data; if it exists
-      // ...
-    }
+      const response = await chatCompletion(messages, BROWSER_TOOLS, apiKey, {
+        model: model || 'deepseek-v4-flash',
+        thinkingEnabled: thinkingEnabled !== false,
+        reasoningEffort: reasoningEffort || 'high'
+      });
 
       const choice = response.choices?.[0];
       if (!choice) {
@@ -241,128 +242,111 @@ async function runAgentTask(userMessage, port, isAborted) {
         return;
       }
 
-      const msg = choice.message;
-
+      const asstMsg = choice.message;
       const assistantMsg = { role: 'assistant' };
-      if (msg.content) assistantMsg.content = msg.content;
-      if (msg.reasoning_content) assistantMsg.reasoning_content = msg.reasoning_content;
-      if (msg.tool_calls) assistantMsg.tool_calls = msg.tool_calls;
+      if (asstMsg.content) assistantMsg.content = asstMsg.content;
+      if (asstMsg.reasoning_content) assistantMsg.reasoning_content = asstMsg.reasoning_content;
+      if (asstMsg.tool_calls) assistantMsg.tool_calls = asstMsg.tool_calls;
       messages.push(assistantMsg);
 
-      if (msg.tool_calls && msg.tool_calls.length > 0) {
-        for (const toolCall of msg.tool_calls) {
+      if (asstMsg.tool_calls && asstMsg.tool_calls.length > 0) {
+        for (const tc of asstMsg.tool_calls) {
           if (isAborted()) return;
 
-          const funcName = toolCall.function.name;
-          let funcArgs;
-          try {
-            funcArgs = JSON.parse(toolCall.function.arguments);
-          } catch {
-            funcArgs = {};
-          }
+          const fName = tc.function.name;
+          let fArgs = {};
+          try { fArgs = JSON.parse(tc.function.arguments); } catch {}
 
-          port.postMessage({
-            type: 'progress',
-            data: {
-              tool: funcName,
-              args: funcArgs,
-              thinking: msg.content || ''
-            }
-          });
+          port.postMessage({ type: 'progress', data: { tool: fName, args: fArgs, thinking: asstMsg.content || '' } });
 
-          const result = await executeToolAction(tab.id, funcName, funcArgs);
+          const result = await executeToolAction(tab.id, fName, fArgs);
 
-          if (result.image_data) {
-            pendingImage = result.image_data;
-          }
+          if (result.image_data) pendingImage = result.image_data;
 
-          let toolResultContent;
+          let toolContent;
           if (result.page_content) {
-            toolResultContent = `Result: ${result.message || result.error}\n\nUpdated page:\n${result.page_content.substring(0, 3000)}`;
+            toolContent = `${result.message || result.error}\n\nPage:\n${result.page_content.substring(0, 3000)}`;
           } else if (result.updated_page) {
-            toolResultContent = `Result: ${result.message || result.error}\n\nUpdated page:\n${result.updated_page.substring(0, 3000)}`;
+            toolContent = `${result.message || result.error}\n\nPage:\n${result.updated_page.substring(0, 3000)}`;
+          } else if (result.success === false && result.error) {
+            toolContent = `ERROR: ${result.error}\nAnalyze why this failed and try a different approach. Do NOT repeat the same action.`;
           } else {
-            toolResultContent = JSON.stringify(result);
+            toolContent = JSON.stringify(result);
           }
 
-          messages.push({
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: toolResultContent
-          });
-
+          messages.push({ role: 'tool', tool_call_id: tc.id, content: toolContent });
           port.postMessage({ type: 'tool_result', data: result });
 
           if (result.possible_navigation) {
             await new Promise(r => setTimeout(r, 1500));
             await ensureContentScript(tab.id);
-            const refreshedContent = await getPageContent(tab.id);
-            if (refreshedContent) {
-              messages.push({
-                role: 'user',
-                content: `[Page may have navigated. Current page content:]\n\n${refreshedContent}`
-              });
+            const fresh = await getPageContent(tab.id);
+            if (fresh) {
+              messages.push({ role: 'user', content: `[Page navigated. Updated content:]\n${fresh}` });
             }
           }
         }
-
-        port.postMessage({ type: 'status', data: 'Processing result...' });
-      } else if (choice.finish_reason === 'stop' || choice.finish_reason === 'length') {
-        port.postMessage({
-          type: 'result',
-          data: msg.content || 'Task completed.'
-        });
-        return;
       } else {
-        port.postMessage({
-          type: 'error',
-          data: `Unexpected finish reason: ${choice.finish_reason}`
-        });
+        // Inject pending image before final answer
+        if (pendingImage) {
+          messages.push({
+            role: 'user',
+            content: [
+              { type: 'text', text: 'Here is the screenshot:' },
+              { type: 'image_url', image_url: { url: pendingImage } }
+            ]
+          });
+          pendingImage = null;
+          continue;
+        }
+
+        port.postMessage({ type: 'result', data: asstMsg.content || 'Task completed.' });
         return;
+      }
+
+      // Inject pending image into next turn
+      if (pendingImage) {
+        messages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Here is the latest screenshot:' },
+            { type: 'image_url', image_url: { url: pendingImage } }
+          ]
+        });
+        pendingImage = null;
       }
 
       iterations++;
     }
 
     const finalContent = await getPageContent(tab.id);
-    messages.push({
-      role: 'user',
-      content: `Maximum steps reached. Provide a summary based on the current page:\n\n${finalContent}`
-    });
-
-    const finalResponse = await chatCompletion(messages, [], apiKey, {
+    messages.push({ role: 'user', content: `Max steps reached. Summarize:\n${finalContent}` });
+    const finalResp = await chatCompletion(messages, null, apiKey, {
       model: model || 'deepseek-v4-flash',
       thinkingEnabled: thinkingEnabled !== false,
       reasoningEffort: reasoningEffort || 'high'
     });
-    port.postMessage({
-      type: 'result',
-      data: finalResponse.choices?.[0]?.message?.content || 'Task execution completed. Check the page for results.'
-    });
+    port.postMessage({ type: 'result', data: finalResp.choices?.[0]?.message?.content || 'Done.' });
 
   } catch (error) {
-    port.postMessage({ type: 'error', data: error.message || 'An unexpected error occurred.' });
+    port.postMessage({ type: 'error', data: error.message || 'Unexpected error.' });
   } finally {
-    taskRunning = false;
+    runningTasks.delete(tab.id);
   }
 }
 
-initWebSocketBridge(runAgentTask, {
-  get isAborted() { return currentTaskAborted; },
-  set isAborted(v) { currentTaskAborted = v; }
-});
-
+// --- Port Management ---
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'sidebar') {
+    let taskAborted = false;
 
     port.onMessage.addListener(async (msg) => {
       switch (msg.type) {
         case 'get_settings': {
-          const settings = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
-          port.postMessage({ type: 'settings', data: settings });
+          const s = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
+          port.postMessage({ type: 'settings', data: s });
           break;
         }
-
         case 'save_settings': {
           await chrome.storage.sync.set({
             apiKey: msg.apiKey,
@@ -373,21 +357,15 @@ chrome.runtime.onConnect.addListener((port) => {
           port.postMessage({ type: 'settings_saved' });
           break;
         }
-
-        case 'run_task': {
-          runAgentTask(msg.text, port, () => currentTaskAborted);
+        case 'run_task':
+          runAgentTask(msg.text, port, () => taskAborted);
           break;
-        }
-
-        case 'cancel_task': {
-          currentTaskAborted = true;
+        case 'cancel_task':
+          taskAborted = true;
           break;
-        }
       }
     });
 
-    port.onDisconnect.addListener(() => {
-      currentTaskAborted = true;
-    });
+    port.onDisconnect.addListener(() => { taskAborted = true; });
   }
 });

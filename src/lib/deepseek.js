@@ -12,7 +12,7 @@ export async function chatCompletion(messages, tools, apiKey, options = {}) {
   const body = {
     model,
     messages,
-    max_tokens: 4096,
+    max_tokens: thinkingEnabled ? 8192 : 4096,
     stream: false
   };
 
@@ -53,7 +53,7 @@ export async function chatCompletion(messages, tools, apiKey, options = {}) {
         return response.json();
       }
 
-      if (response.status === 429 || response.status >= 500) {
+      if (response.status === 429 || response.status === 408 || response.status >= 500) {
         let errorMessage;
         try {
           const error = await response.json();

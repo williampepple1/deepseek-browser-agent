@@ -136,7 +136,7 @@
         if (!el || !document.contains(el)) {
           return { success: false, error: `Element [${idx}] no longer exists on page. Try get_page_content to refresh.` };
         }
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.scrollIntoView({ behavior: 'instant', block: 'center' });
         el.focus();
 
         const urlBefore = window.location.href;
@@ -163,7 +163,7 @@
         if (!el || !document.contains(el)) {
           return { success: false, error: `Element [${idx}] no longer exists on page. Try get_page_content to refresh.` };
         }
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.scrollIntoView({ behavior: 'instant', block: 'center' });
         el.focus();
 
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {

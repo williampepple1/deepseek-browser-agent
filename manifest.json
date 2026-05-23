@@ -3,7 +3,7 @@
   "name": "DeepSeek Browser Agent",
   "version": "1.1.0",
   "description": "An agentic browser extension powered by DeepSeek AI that can see your page and complete tasks",
-  "permissions": ["activeTab", "scripting", "storage", "sidePanel", "tabs", "alarms"],
+  "permissions": ["activeTab", "scripting", "storage", "sidePanel", "tabs"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "src/background/service-worker.js",
