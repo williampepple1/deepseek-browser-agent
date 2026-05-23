@@ -1,0 +1,11 @@
+{
+  "name": "deepseek-browser-agent",
+  "version": "1.0.0",
+  "description": "An agentic browser extension powered by DeepSeek AI that can see pages and complete tasks autonomously",
+  "private": true,
+  "scripts": {
+    "build": "echo 'No build step required'"
+  },
+  "keywords": ["browser-extension", "deepseek", "ai-agent", "automation"],
+  "license": "MIT"
+}

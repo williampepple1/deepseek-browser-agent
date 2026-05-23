@@ -1,0 +1,38 @@
+const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
+
+export async function chatCompletion(messages, tools, apiKey, model = 'deepseek-chat') {
+  const body = {
+    model,
+    messages,
+    temperature: 0.7,
+    max_tokens: 4096,
+    stream: false
+  };
+
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+    body.tool_choice = 'auto';
+  }
+
+  const response = await fetch(DEEPSEEK_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.ok) {
+    let errorMessage;
+    try {
+      const error = await response.json();
+      errorMessage = error.error?.message || `HTTP ${response.status}`;
+    } catch {
+      errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+    }
+    throw new Error(`DeepSeek API error: ${errorMessage}`);
+  }
+
+  return response.json();
+}
