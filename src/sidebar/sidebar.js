@@ -129,6 +129,14 @@ function scrollToBottom() {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+function trimMessages() {
+  const MAX_MESSAGES = 80;
+  const msgs = messagesEl.querySelectorAll('.message:not(.welcome)');
+  while (msgs.length > MAX_MESSAGES) {
+    msgs[0].remove();
+  }
+}
+
 function addStatusMessage(text) {
   const existing = messagesEl.querySelector('.message.status:last-child');
   if (existing && existing.dataset.status === 'active') {
@@ -139,6 +147,7 @@ function addStatusMessage(text) {
     div.dataset.status = 'active';
     div.textContent = text;
     messagesEl.appendChild(div);
+    trimMessages();
   }
   scrollToBottom();
 }
@@ -146,13 +155,14 @@ function addStatusMessage(text) {
 function updateStatus(text) {
   const existing = messagesEl.querySelector('.message.status:last-child');
   if (existing && existing.dataset.status === 'active') {
-    existing.innerHTML = `<span class="spinner"></span>${text}`;
+    existing.innerHTML = `<span class="spinner"></span>${escapeHtml(text)}`;
   } else {
     const div = document.createElement('div');
     div.className = 'message status';
     div.dataset.status = 'active';
-    div.innerHTML = `<span class="spinner"></span>${text}`;
+    div.innerHTML = `<span class="spinner"></span>${escapeHtml(text)}`;
     messagesEl.appendChild(div);
+    trimMessages();
   }
   scrollToBottom();
 }
@@ -164,6 +174,7 @@ function addAgentMessage(text) {
   div.className = 'message agent';
   div.textContent = text;
   messagesEl.appendChild(div);
+  trimMessages();
   scrollToBottom();
 }
 
@@ -178,10 +189,11 @@ function addProgressMessage(data) {
   }
   if (data.tool) {
     const argsStr = formatArgs(data.args);
-    html += `<div class="tool-action">${data.tool}(${argsStr})</div>`;
+    html += `<div class="tool-action">${escapeHtml(data.tool)}(${argsStr})</div>`;
   }
   div.innerHTML = html;
   messagesEl.appendChild(div);
+  trimMessages();
   scrollToBottom();
 }
 
@@ -195,6 +207,7 @@ function addToolResultMessage(data) {
   const isError = data.error || data.success === false;
   div.innerHTML = `<div class="tool-result" style="color:${isError ? 'var(--error)' : 'var(--success)'}">${isError ? '✗' : '✓'} ${escapeHtml(text.substring(0, 200))}</div>`;
   messagesEl.appendChild(div);
+  trimMessages();
   scrollToBottom();
 }
 
@@ -205,6 +218,7 @@ function addErrorMessage(text) {
   div.className = 'message error';
   div.textContent = text;
   messagesEl.appendChild(div);
+  trimMessages();
   scrollToBottom();
 }
 
@@ -221,10 +235,10 @@ function formatArgs(args) {
   if (!args || Object.keys(args).length === 0) return '';
   const parts = [];
   for (const [key, value] of Object.entries(args)) {
-    const str = typeof value === 'string' ? `"${value.substring(0, 30)}"` : JSON.stringify(value);
+    const str = typeof value === 'string' ? `"${value.substring(0, 30)}"` : JSON.stringify(value).substring(0, 50);
     parts.push(`${key}: ${str}`);
   }
-  return parts.join(', ');
+  return parts.join(', ').substring(0, 100);
 }
 
 function escapeHtml(text) {
@@ -254,7 +268,7 @@ sendBtn.addEventListener('click', () => {
   div.className = 'message user';
   div.textContent = text;
   messagesEl.appendChild(div);
-
+  trimMessages();
   userInput.value = '';
   userInput.style.height = 'auto';
   setRunning(true);

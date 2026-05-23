@@ -1,4 +1,6 @@
 const DEEPSEEK_API_URL = 'https://api.deepseek.com/v1/chat/completions';
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 1000;
 
 export async function chatCompletion(messages, tools, apiKey, options = {}) {
   const {
@@ -27,21 +29,42 @@ export async function chatCompletion(messages, tools, apiKey, options = {}) {
     body.tool_choice = 'auto';
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
+  let lastError;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await new Promise(r => setTimeout(r, RETRY_DELAY * Math.pow(2, attempt - 1)));
+    }
 
-  try {
-    const response = await fetch(DEEPSEEK_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
 
-    if (!response.ok) {
+    try {
+      const response = await fetch(DEEPSEEK_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+
+      if (response.ok) {
+        return response.json();
+      }
+
+      if (response.status === 429 || response.status >= 500) {
+        let errorMessage;
+        try {
+          const error = await response.json();
+          errorMessage = error.error?.message || `HTTP ${response.status}`;
+        } catch {
+          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+        }
+        lastError = new Error(`DeepSeek API error: ${errorMessage}`);
+        continue;
+      }
+
       let errorMessage;
       try {
         const error = await response.json();
@@ -50,10 +73,16 @@ export async function chatCompletion(messages, tools, apiKey, options = {}) {
         errorMessage = `HTTP ${response.status}: ${response.statusText}`;
       }
       throw new Error(`DeepSeek API error: ${errorMessage}`);
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        lastError = new Error('DeepSeek API request timed out');
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
     }
-
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
   }
+
+  throw lastError || new Error('DeepSeek API request failed after retries');
 }

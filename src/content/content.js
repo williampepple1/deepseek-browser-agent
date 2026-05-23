@@ -16,11 +16,12 @@
   ]);
 
   function isVisible(el) {
-    if (!el || !el.offsetParent && el.tagName !== 'BODY') return false;
+    if (!el) return false;
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return false;
     const style = window.getComputedStyle(el);
-    return style.visibility !== 'hidden' && style.display !== 'none';
+    if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') return false;
+    return true;
   }
 
   function isInteractive(el) {
@@ -132,41 +133,41 @@
       case 'click': {
         const idx = action.element_index;
         const el = elementMap.get(idx);
-        if (!el) return { success: false, error: `Element [${idx}] not found on page. Try refreshing page content.` };
+        if (!el || !document.contains(el)) {
+          return { success: false, error: `Element [${idx}] no longer exists on page. Try get_page_content to refresh.` };
+        }
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.focus();
 
+        const urlBefore = window.location.href;
         const isNavigationLikely = (el.tagName === 'A' && el.href && !el.href.startsWith('javascript:')) ||
           (el.tagName === 'BUTTON' && el.closest('form') && (el.type === 'submit' || !el.type));
 
         el.click();
 
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 500));
 
+        const urlChanged = window.location.href !== urlBefore;
         const updated = getPageContent();
         return {
           success: true,
           message: `Clicked [${idx}]: ${el.textContent?.trim().substring(0, 60)}`,
           updated_page: updated,
-          possible_navigation: isNavigationLikely
+          possible_navigation: isNavigationLikely || urlChanged
         };
       }
 
       case 'type': {
         const idx = action.element_index;
         const el = elementMap.get(idx);
-        if (!el) return { success: false, error: `Element [${idx}] not found on page.` };
+        if (!el || !document.contains(el)) {
+          return { success: false, error: `Element [${idx}] no longer exists on page. Try get_page_content to refresh.` };
+        }
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.focus();
 
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-          const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set ||
-            Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-          if (nativeSetter) {
-            nativeSetter.call(el, action.text);
-          } else {
-            el.value = action.text;
-          }
+          el.value = action.text;
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
         } else if (el.getAttribute('contenteditable') === 'true') {
@@ -190,7 +191,12 @@
           case 'bottom': window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }); break;
           case 'top': window.scrollTo({ top: 0, behavior: 'smooth' }); break;
         }
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise((resolve) => {
+          let resolved = false;
+          const done = () => { if (!resolved) { resolved = true; resolve(); } };
+          window.addEventListener('scrollend', done, { once: true });
+          setTimeout(done, 800);
+        });
         const updated = getPageContent();
         return { success: true, message: `Scrolled ${action.direction}`, updated_page: updated };
       }
@@ -204,9 +210,16 @@
         activeEl.dispatchEvent(new KeyboardEvent('keyup', opts));
 
         if (key === 'Enter' && activeEl.closest('form')) {
-          await new Promise(r => setTimeout(r, 500));
+          const form = activeEl.closest('form');
+          const submitBtn = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])');
+          if (submitBtn && isVisible(submitBtn)) {
+            submitBtn.click();
+          } else {
+            try { form.submit(); } catch {}
+          }
+          await new Promise(r => setTimeout(r, 800));
           const updated = getPageContent();
-          return { success: true, message: `Pressed Enter (form submission likely)`, updated_page: updated };
+          return { success: true, message: 'Pressed Enter (form submitted)', updated_page: updated };
         }
         return { success: true, message: `Pressed key: ${key}` };
       }

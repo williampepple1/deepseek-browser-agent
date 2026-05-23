@@ -11,6 +11,11 @@ async function getActiveTab() {
 }
 
 async function ensureContentScript(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab) return false;
+  if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('about:'))) {
+    return false;
+  }
   try {
     await chrome.tabs.sendMessage(tabId, { type: 'ping' });
     return true;
@@ -37,26 +42,31 @@ async function getPageContent(tabId) {
   }
 }
 
+async function waitForPageLoad(tabId) {
+  await new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 15000);
+    const listener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.status === 'complete') {
+        clearTimeout(timeout);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
 async function executeToolAction(tabId, toolName, args) {
   switch (toolName) {
     case 'navigate': {
-      const tab = await getActiveTab();
-      if (!tab) return { success: false, error: 'No active tab' };
+      if (!args.url || !/^https?:\/\//i.test(args.url)) {
+        return { success: false, error: 'Invalid URL. Must start with http:// or https://' };
+      }
       await chrome.tabs.update(tabId, { url: args.url });
-      await new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          chrome.tabs.onUpdated.removeListener(listener);
-          resolve();
-        }, 15000);
-        const listener = (updatedTabId, changeInfo) => {
-          if (updatedTabId === tabId && changeInfo.status === 'complete') {
-            clearTimeout(timeout);
-            chrome.tabs.onUpdated.removeListener(listener);
-            resolve();
-          }
-        };
-        chrome.tabs.onUpdated.addListener(listener);
-      });
+      await waitForPageLoad(tabId);
       await ensureContentScript(tabId);
       const content = await getPageContent(tabId);
       return { success: true, message: `Navigated to ${args.url}`, page_content: content };
@@ -69,12 +79,10 @@ async function executeToolAction(tabId, toolName, args) {
     }
 
     case 'go_back': {
-      const tab = await getActiveTab();
-      if (!tab) return { success: false, error: 'No active tab' };
       if (!await chrome.tabs.goBack(tabId)) {
         return { success: false, error: 'No previous page in history' };
       }
-      await new Promise(r => setTimeout(r, 1000));
+      await waitForPageLoad(tabId);
       await ensureContentScript(tabId);
       const content = await getPageContent(tabId);
       return { success: true, message: 'Went back', page_content: content };
@@ -85,9 +93,12 @@ async function executeToolAction(tabId, toolName, args) {
     case 'scroll':
     case 'press':
     case 'get_page_content': {
+      const safeArgs = { ...args };
+      delete safeArgs.action;
+      delete safeArgs.type;
       const result = await chrome.tabs.sendMessage(tabId, {
         type: 'execute_action',
-        action: { action: toolName, ...args }
+        action: { action: toolName, ...safeArgs }
       });
       return result?.data || { success: false, error: 'No response from page' };
     }
@@ -112,7 +123,15 @@ async function runAgentTask(userMessage, port, isAborted) {
     }
 
     port.postMessage({ type: 'status', data: 'Reading page content...' });
-    await ensureContentScript(tab.id);
+    const contentReady = await ensureContentScript(tab.id);
+    if (!contentReady) {
+      if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('about:'))) {
+        port.postMessage({ type: 'error', data: 'Cannot read Chrome system pages. Please open a regular web page.' });
+      } else {
+        port.postMessage({ type: 'error', data: 'Could not read page content. The page may be restricted or still loading. Try refreshing.' });
+      }
+      return;
+    }
 
     const pageContext = await getPageContent(tab.id);
     if (!pageContext) {
@@ -158,12 +177,11 @@ async function runAgentTask(userMessage, port, isAborted) {
 
       const msg = choice.message;
 
-      messages.push({
-        role: 'assistant',
-        content: msg.content || null,
-        reasoning_content: msg.reasoning_content || null,
-        tool_calls: msg.tool_calls || null
-      });
+      const assistantMsg = { role: 'assistant' };
+      if (msg.content) assistantMsg.content = msg.content;
+      if (msg.reasoning_content) assistantMsg.reasoning_content = msg.reasoning_content;
+      if (msg.tool_calls) assistantMsg.tool_calls = msg.tool_calls;
+      messages.push(assistantMsg);
 
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         for (const toolCall of msg.tool_calls) {
