@@ -11,7 +11,7 @@ Your capabilities:
 
 Important rules:
 1. Use element indices (like [1], [2]) from the page content to reference elements
-2. Execute ONE action at a time, then wait for the result before the next action
+2. Call EXACTLY ONE tool per response — never batch multiple tool calls
 3. After actions, you will receive updated page content automatically — use it to decide your next step
 4. Be concise — briefly explain each step as you work
 5. If an element is not found, call get_page_content to refresh your view of the page

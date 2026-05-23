@@ -219,7 +219,7 @@
           }
           await new Promise(r => setTimeout(r, 800));
           const updated = getPageContent();
-          return { success: true, message: 'Pressed Enter (form submitted)', updated_page: updated };
+          return { success: true, message: 'Pressed Enter (form submitted)', updated_page: updated, possible_navigation: true };
         }
         return { success: true, message: `Pressed key: ${key}` };
       }

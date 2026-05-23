@@ -107,7 +107,7 @@ async function executeToolAction(tabId, toolName, args) {
     }
 
     case 'take_screenshot': {
-      const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: 'png' });
+      const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
       return { success: true, message: 'Screenshot captured.', image_data: dataUrl };
     }
 
