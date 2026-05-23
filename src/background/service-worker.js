@@ -1,5 +1,6 @@
 import { chatCompletion } from '../lib/deepseek.js';
 import { BROWSER_TOOLS, SYSTEM_PROMPT } from '../lib/tools.js';
+import { initWebSocketBridge } from '../bridge/ws-client.js';
 
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
@@ -88,6 +89,33 @@ async function executeToolAction(tabId, toolName, args) {
       return { success: true, message: 'Went back', page_content: content };
     }
 
+    case 'take_screenshot': {
+      const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: 'png' });
+      return { success: true, message: 'Screenshot captured.', image_data: dataUrl };
+    }
+
+    case 'list_tabs': {
+      const tabs = await chrome.tabs.query({ currentWindow: true });
+      const tabList = tabs.map(t => `[${t.id}] ${t.title}`).join('\n');
+      return { success: true, message: 'Tabs listed:', page_content: tabList };
+    }
+
+    case 'switch_tab': {
+      await chrome.tabs.update(args.tab_id, { active: true });
+      return { success: true, message: `Switched to tab ${args.tab_id}` };
+    }
+
+    case 'open_tab': {
+      const tab = await chrome.tabs.create({ url: args.url });
+      return { success: true, message: `Opened tab ${tab.id}` };
+    }
+
+    case 'read_document': {
+      const response = await fetch(args.url);
+      const text = await response.text();
+      return { success: true, message: 'Document content:', page_content: text.substring(0, 5000) };
+    }
+
     case 'click':
     case 'type':
     case 'scroll':
@@ -108,7 +136,36 @@ async function executeToolAction(tabId, toolName, args) {
   }
 }
 
+let taskRunning = false;
+export let currentTaskAborted = false;
+
+const runningTasks = new Set();
+
 async function runAgentTask(userMessage, port, isAborted) {
+  const tab = await getActiveTab();
+  if (!tab) {
+    port.postMessage({ type: 'error', data: 'No active tab found.' });
+    return;
+  }
+  if (runningTasks.has(tab.id)) {
+    port.postMessage({ type: 'error', data: 'A task is already running in this tab.' });
+    return;
+  }
+  runningTasks.add(tab.id);
+
+  try {
+    const { apiKey, model, thinkingEnabled, reasoningEffort } = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
+    
+    // ... rest of the runAgentTask function ...
+
+  } catch (error) {
+    port.postMessage({ type: 'error', data: error.message || 'An unexpected error occurred.' });
+  } finally {
+    runningTasks.delete(tab.id);
+  }
+}
+  taskRunning = true;
+  currentTaskAborted = false;
   try {
     const { apiKey, model, thinkingEnabled, reasoningEffort } = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
     if (!apiKey) {
@@ -139,23 +196,27 @@ async function runAgentTask(userMessage, port, isAborted) {
       return;
     }
 
-    const messages = [
-      { role: 'system', content: SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: `Here is the current page:\n\n${pageContext}\n\nUser task: ${userMessage}\n\nComplete this task step by step using the available tools. After each action you will see the updated page content.`
-      }
-    ];
-
-    let iterations = 0;
-    const MAX_ITERATIONS = 20;
-
-    port.postMessage({ type: 'status', data: 'Thinking...' });
+    let nextUserMessage = `Here is the current page:\n\n${pageContext}\n\nUser task: ${userMessage}\n\nComplete this task step by step using the available tools. After each action you will see the updated page content.`;
+    let pendingImage = null;
 
     while (iterations < MAX_ITERATIONS) {
       if (isAborted()) {
         port.postMessage({ type: 'status', data: 'Task cancelled.' });
         return;
+      }
+
+      // If we have a pending image from a tool, inject it into the message
+      if (pendingImage) {
+        messages.push({
+          role: 'user',
+          content: [
+            { type: 'text', text: "Here is the screenshot you requested:" },
+            { type: 'image_url', image_url: { url: pendingImage } }
+          ]
+        });
+        pendingImage = null;
+      } else {
+        messages.push({ role: 'user', content: nextUserMessage });
       }
 
       const response = await chatCompletion(
@@ -168,6 +229,11 @@ async function runAgentTask(userMessage, port, isAborted) {
           reasoningEffort: reasoningEffort || 'high'
         }
       );
+
+      // ... rest of the loop ...
+      // Need to store pendingImage = result.image_data; if it exists
+      // ...
+    }
 
       const choice = response.choices?.[0];
       if (!choice) {
@@ -205,6 +271,10 @@ async function runAgentTask(userMessage, port, isAborted) {
           });
 
           const result = await executeToolAction(tab.id, funcName, funcArgs);
+
+          if (result.image_data) {
+            pendingImage = result.image_data;
+          }
 
           let toolResultContent;
           if (result.page_content) {
@@ -272,12 +342,18 @@ async function runAgentTask(userMessage, port, isAborted) {
 
   } catch (error) {
     port.postMessage({ type: 'error', data: error.message || 'An unexpected error occurred.' });
+  } finally {
+    taskRunning = false;
   }
 }
 
+initWebSocketBridge(runAgentTask, {
+  get isAborted() { return currentTaskAborted; },
+  set isAborted(v) { currentTaskAborted = v; }
+});
+
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'sidebar') {
-    let taskAborted = false;
 
     port.onMessage.addListener(async (msg) => {
       switch (msg.type) {
@@ -299,19 +375,19 @@ chrome.runtime.onConnect.addListener((port) => {
         }
 
         case 'run_task': {
-          runAgentTask(msg.text, port, () => taskAborted);
+          runAgentTask(msg.text, port, () => currentTaskAborted);
           break;
         }
 
         case 'cancel_task': {
-          taskAborted = true;
+          currentTaskAborted = true;
           break;
         }
       }
     });
 
     port.onDisconnect.addListener(() => {
-      taskAborted = true;
+      currentTaskAborted = true;
     });
   }
 });

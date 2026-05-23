@@ -152,11 +152,58 @@ export const BROWSER_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'go_back',
-      description: 'Go back to the previous page in browser history.',
+      name: 'take_screenshot',
+      description: 'Capture the visible area of the current tab as an image.',
+      parameters: { type: 'object', properties: {} }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_tabs',
+      description: 'List all open tabs in the current window.',
+      parameters: { type: 'object', properties: {} }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'switch_tab',
+      description: 'Switch to a different tab by its ID.',
       parameters: {
         type: 'object',
-        properties: {}
+        properties: {
+          tab_id: { type: 'number', description: 'The ID of the tab to switch to' }
+        },
+        required: ['tab_id']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'open_tab',
+      description: 'Open a new tab with a specific URL.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL to open' }
+        },
+        required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_document',
+      description: 'Fetch and read text content from a text-based document (txt, md, html).',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL of the document' }
+        },
+        required: ['url']
       }
     }
   }
