@@ -107,7 +107,9 @@ async function executeToolAction(tabId, toolName, args) {
     }
 
     case 'take_screenshot': {
-      const dataUrl = await chrome.tabs.captureVisibleTab(null, { format: 'png' });
+      const t = await chrome.tabs.get(tabId).catch(() => null);
+      const winId = t?.windowId ?? null;
+      const dataUrl = await chrome.tabs.captureVisibleTab(winId, { format: 'png' });
       return { success: true, message: 'Screenshot captured.', image_data: dataUrl };
     }
 
@@ -119,14 +121,14 @@ async function executeToolAction(tabId, toolName, args) {
 
     case 'switch_tab': {
       await chrome.tabs.update(args.tab_id, { active: true });
-      return { success: true, message: `Switched to tab ${args.tab_id}` };
+      return { success: true, message: `Switched to tab ${args.tab_id}`, new_tab_id: args.tab_id };
     }
 
     case 'open_tab': {
       const newTab = await chrome.tabs.create({ url: args.url });
       await waitForPageLoad(newTab.id);
       await chrome.tabs.update(newTab.id, { active: true });
-      return { success: true, message: `Opened and switched to tab ${newTab.id}` };
+      return { success: true, message: `Opened and switched to tab ${newTab.id}`, new_tab_id: newTab.id };
     }
 
     case 'read_document': {
@@ -182,6 +184,7 @@ async function runAgentTask(userMessage, port, isAborted) {
     return;
   }
   runningTasks.add(tab.id);
+  const entryTabId = tab.id;
 
   try {
     const { apiKey, model, thinkingEnabled, reasoningEffort } = await chrome.storage.sync.get(['apiKey', 'model', 'thinkingEnabled', 'reasoningEffort']);
@@ -261,6 +264,15 @@ async function runAgentTask(userMessage, port, isAborted) {
 
           const result = await executeToolAction(tab.id, fName, fArgs);
 
+          if (result.new_tab_id) {
+            tab.id = result.new_tab_id;
+            await ensureContentScript(tab.id);
+            const newContent = await getPageContent(tab.id);
+            if (newContent) {
+              messages.push({ role: 'user', content: `[Switched to new tab. Page content:]\n${newContent}` });
+            }
+          }
+
           if (result.image_data) pendingImage = result.image_data;
 
           let toolContent;
@@ -331,7 +343,7 @@ async function runAgentTask(userMessage, port, isAborted) {
   } catch (error) {
     port.postMessage({ type: 'error', data: error.message || 'Unexpected error.' });
   } finally {
-    runningTasks.delete(tab.id);
+    runningTasks.delete(entryTabId);
   }
 }
 
