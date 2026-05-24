@@ -6,6 +6,7 @@ Your capabilities:
 - Scroll through pages
 - Navigate to URLs
 - Extract information from pages
+- Extract and translate text from PDF documents
 - Wait for elements to load
 - Go back in browser history
 
@@ -21,7 +22,8 @@ Important rules:
 9. If an action fails, try an alternative approach — e.g. if click[5] fails, try press Enter instead
 10. If the page changes unexpectedly (SPA navigation, popups), call get_page_content to re-scan
 11. Never repeat the exact same action that just failed — try a different approach
-12. When you complete the task, provide a clear summary of what was accomplished.`;
+12. If the page is a PDF (no interactive elements shown), call read_pdf to extract its text
+13. When you complete the task, provide a clear summary of what was accomplished.`;
 
 export const BROWSER_TOOLS = [
   {
@@ -202,6 +204,23 @@ export const BROWSER_TOOLS = [
           url: { type: 'string', description: 'The URL of the document' }
         },
         required: ['url']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_pdf',
+      description: 'Extract text from the currently open PDF in the browser. Specify pages like "1-3" or "5".',
+      parameters: {
+        type: 'object',
+        properties: {
+          pages: {
+            type: 'string',
+            description: 'Page range to extract, e.g. "1-3", "5", or leave empty for all pages'
+          }
+        },
+        required: []
       }
     }
   },

@@ -130,6 +130,35 @@
 
   async function executeAction(action) {
     switch (action.action) {
+      case 'read_pdf': {
+        const pagesStr = action.pages || '';
+        const textLayers = document.querySelectorAll('.textLayer');
+        if (textLayers.length === 0) {
+          return { success: false, error: 'No PDF text found. Make sure a PDF is open in this tab.' };
+        }
+        let pages;
+        if (!pagesStr.trim()) {
+          pages = Array.from({ length: textLayers.length }, (_, i) => i + 1);
+        } else {
+          pages = [];
+          for (const part of pagesStr.split(',')) {
+            const range = part.trim().split('-');
+            const start = parseInt(range[0]);
+            const end = parseInt(range[1] || range[0]);
+            for (let p = start; p <= end; p++) pages.push(p);
+          }
+        }
+        const result = [];
+        for (const pageNum of pages) {
+          if (pageNum < 1 || pageNum > textLayers.length) continue;
+          const layer = textLayers[pageNum - 1];
+          const spans = layer.querySelectorAll('span');
+          const text = Array.from(spans).map(s => s.textContent).join(' ');
+          result.push(`--- Page ${pageNum} ---\n${text}`);
+        }
+        return { success: true, message: `Extracted ${result.length} page(s).`, page_content: result.join('\n\n') };
+      }
+
       case 'click': {
         const idx = action.element_index;
         const el = elementMap.get(idx);

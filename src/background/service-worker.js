@@ -1,6 +1,5 @@
 import { chatCompletion } from '../lib/deepseek.js';
 import { BROWSER_TOOLS, SYSTEM_PROMPT } from '../lib/tools.js';
-import { initWebSocketBridge } from '../bridge/ws-client.js';
 
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
@@ -155,7 +154,8 @@ async function executeToolAction(tabId, toolName, args) {
     case 'type':
     case 'scroll':
     case 'press':
-    case 'get_page_content': {
+    case 'get_page_content':
+    case 'read_pdf': {
       const safeArgs = { ...args };
       delete safeArgs.action;
       delete safeArgs.type;
@@ -173,7 +173,6 @@ async function executeToolAction(tabId, toolName, args) {
 
 // --- Agent Task Loop ---
 const runningTasks = new Set();
-let currentTaskAborted = false;
 
 async function runAgentTask(userMessage, port, isAborted) {
   const tab = await getActiveTab();
@@ -279,7 +278,8 @@ async function runAgentTask(userMessage, port, isAborted) {
 
           let toolContent;
           if (result.page_content) {
-            toolContent = `${result.message || result.error}\n\nPage:\n${result.page_content.substring(0, 3000)}`;
+            const cap = fName === 'read_pdf' ? 15000 : 3000;
+            toolContent = `${result.message || result.error}\n\nResult:\n${result.page_content.substring(0, cap)}`;
           } else if (result.updated_page) {
             toolContent = `${result.message || result.error}\n\nPage:\n${result.updated_page.substring(0, 3000)}`;
           } else if (result.success === false && result.error) {
@@ -350,13 +350,9 @@ async function runAgentTask(userMessage, port, isAborted) {
 }
 
 // --- Port Management ---
-initWebSocketBridge(runAgentTask, {
-  get isAborted() { return currentTaskAborted; },
-  set isAborted(v) { currentTaskAborted = v; }
-});
-
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === 'sidebar') {
+    let taskAborted = false;
 
     port.onMessage.addListener(async (msg) => {
       switch (msg.type) {
@@ -376,15 +372,14 @@ chrome.runtime.onConnect.addListener((port) => {
           break;
         }
         case 'run_task':
-          currentTaskAborted = false;
-          runAgentTask(msg.text, port, () => currentTaskAborted);
+          runAgentTask(msg.text, port, () => taskAborted);
           break;
         case 'cancel_task':
-          currentTaskAborted = true;
+          taskAborted = true;
           break;
       }
     });
 
-    port.onDisconnect.addListener(() => { currentTaskAborted = true; });
+    port.onDisconnect.addListener(() => { taskAborted = true; });
   }
 });
